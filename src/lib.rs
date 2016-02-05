@@ -17,24 +17,24 @@ use std::mem;
 /// useful for implementing efficient concurrent programs.
 ///
 /// Another difference from `std::sync::RwLock` is that the guard types are `Send`.
-pub struct SharedMutex<T> {
+pub struct SharedMutex<T: ?Sized> {
     state: Mutex<State>,
     readers: Condvar,
     both: Condvar,
     data: UnsafeCell<T>
 }
 
-unsafe impl<T: Send> Send for SharedMutex<T> {}
-unsafe impl<T: Sync> Sync for SharedMutex<T> {}
+unsafe impl<T: ?Sized + Send> Send for SharedMutex<T> {}
+unsafe impl<T: ?Sized + Sync> Sync for SharedMutex<T> {}
 
 /// A shared read guard on a SharedMutex.
-pub struct SharedMutexReadGuard<'mutex, T: 'mutex> {
+pub struct SharedMutexReadGuard<'mutex, T: ?Sized + 'mutex> {
     data: &'mutex T,
     mutex: &'mutex SharedMutex<T>
 }
 
 /// An exclusive write guard on a SharedMutex.
-pub struct SharedMutexWriteGuard<'mutex, T: 'mutex> {
+pub struct SharedMutexWriteGuard<'mutex, T: ?Sized + 'mutex> {
     data: &'mutex mut T,
     mutex: &'mutex SharedMutex<T>
 }
@@ -51,6 +51,16 @@ impl<T> SharedMutex<T> {
         }
     }
 
+    /// Extract the data from the lock and destroy the lock.
+    ///
+    /// Safe since it requires ownership of the lock.
+    #[inline]
+    pub fn into_inner(self) -> T {
+        unsafe { self.data.into_inner() }
+    }
+}
+
+impl<T: ?Sized> SharedMutex<T> {
     /// Acquire an exclusive Write lock on the data.
     #[inline]
     pub fn write(&self) -> SharedMutexWriteGuard<T> {
@@ -70,14 +80,6 @@ impl<T> SharedMutex<T> {
     /// Safe since it requires exclusive access to the lock itself.
     #[inline]
     pub fn get_mut(&mut self) -> &mut T { unsafe { &mut *self.data.get() } }
-
-    /// Extract the data from the lock and destroy the lock.
-    ///
-    /// Safe since it requires ownership of the lock.
-    #[inline]
-    pub fn into_inner(self) -> T {
-        unsafe { self.data.into_inner() }
-    }
 
     /// Get a write lock using the given state lock.
     ///
@@ -173,26 +175,26 @@ impl<T> SharedMutex<T> {
     }
 }
 
-impl<'mutex, T> Deref for SharedMutexReadGuard<'mutex, T> {
+impl<'mutex, T: ?Sized> Deref for SharedMutexReadGuard<'mutex, T> {
     type Target = T;
 
     #[inline]
     fn deref(&self) -> &T { self.data }
 }
 
-impl<'mutex, T> Deref for SharedMutexWriteGuard<'mutex, T> {
+impl<'mutex, T: ?Sized> Deref for SharedMutexWriteGuard<'mutex, T> {
     type Target = T;
 
     #[inline]
     fn deref(&self) -> &T { self.data }
 }
 
-impl<'mutex, T> DerefMut for SharedMutexWriteGuard<'mutex, T> {
+impl<'mutex, T: ?Sized> DerefMut for SharedMutexWriteGuard<'mutex, T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut T { self.data }
 }
 
-impl<'mutex, T> SharedMutexReadGuard<'mutex, T> {
+impl<'mutex, T: ?Sized> SharedMutexReadGuard<'mutex, T> {
     /// Wait on the given condition variable, and resume with a write lock.
     ///
     /// See the documentation for `std::sync::Condvar::wait` for more information.
@@ -231,7 +233,7 @@ impl<'mutex, T> SharedMutexReadGuard<'mutex, T> {
     }
 }
 
-impl<'mutex, T> SharedMutexWriteGuard<'mutex, T> {
+impl<'mutex, T: ?Sized> SharedMutexWriteGuard<'mutex, T> {
     /// Wait on the given condition variable, and resume with another write lock.
     pub fn wait_for_write(self, cond: &Condvar) -> Self {
         // Grab a reference for later.
@@ -266,14 +268,14 @@ impl<'mutex, T> SharedMutexWriteGuard<'mutex, T> {
     }
 }
 
-impl<'mutex, T> Drop for SharedMutexReadGuard<'mutex, T> {
+impl<'mutex, T: ?Sized> Drop for SharedMutexReadGuard<'mutex, T> {
     #[inline]
     fn drop(&mut self) {
         unsafe { let _ = self.mutex.unlock_reader(); }
     }
 }
 
-impl<'mutex, T> Drop for SharedMutexWriteGuard<'mutex, T> {
+impl<'mutex, T: ?Sized> Drop for SharedMutexWriteGuard<'mutex, T> {
     #[inline]
     fn drop(&mut self) {
         unsafe { let _ = self.mutex.unlock_writer(); }
@@ -294,7 +296,19 @@ const USIZE_BITS: u8 = 64;
 #[cfg(target_pointer_width = "32")]
 const USIZE_BITS: u8 = 32;
 
+// Only the high bit is set.
+//
+// We can mask the State with this to see if the
+// high bit is set, which would indicate a writer
+// is active.
 const WRITER_ACTIVE: usize = 1 << USIZE_BITS - 1;
+
+// All the low bits are set, the high bit is not set.
+//
+// We can mask the State with this to see how many
+// readers there are.
+//
+// Also the maximum number of readers.
 const READERS_MASK: usize = !WRITER_ACTIVE;
 
 impl State {
