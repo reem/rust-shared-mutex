@@ -5,9 +5,10 @@
 //!
 //! A RwLock that can be used with a Condvar.
 
-use std::sync::{Mutex, Condvar};
+use std::sync::{Mutex, Condvar, MutexGuard};
 use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut};
+use std::mem;
 
 /// A lock providing both shared read locks and exclusive write locks.
 ///
@@ -40,6 +41,7 @@ pub struct SharedMutexWriteGuard<'mutex, T: 'mutex> {
 
 impl<T> SharedMutex<T> {
     /// Create a new SharedMutex protecting the given value.
+    #[inline]
     pub fn new(value: T) -> Self {
         SharedMutex {
             state: Mutex::new(State::new()),
@@ -50,9 +52,37 @@ impl<T> SharedMutex<T> {
     }
 
     /// Acquire an exclusive Write lock on the data.
+    #[inline]
     pub fn write(&self) -> SharedMutexWriteGuard<T> {
-        let mut state_lock = self.state.lock().unwrap();
+        let state_lock = self.state.lock().unwrap();
+        unsafe { self.write_from(state_lock) }
+    }
 
+    /// Acquire a shared Read lock on the data.
+    #[inline]
+    pub fn read(&self) -> SharedMutexReadGuard<T> {
+        let state_lock = self.state.lock().unwrap();
+        unsafe { self.read_from(state_lock) }
+    }
+
+    /// Get a mutable reference to the data without locking.
+    ///
+    /// Safe since it requires exclusive access to the lock itself.
+    #[inline]
+    pub fn get_mut(&mut self) -> &mut T { unsafe { &mut *self.data.get() } }
+
+    /// Extract the data from the lock and destroy the lock.
+    ///
+    /// Safe since it requires ownership of the lock.
+    #[inline]
+    pub fn into_inner(self) -> T {
+        unsafe { self.data.into_inner() }
+    }
+
+    /// Get a write lock using the given state lock.
+    ///
+    /// WARNING: The lock MUST be from self.state!!
+    unsafe fn write_from(&self, mut state_lock: MutexGuard<State>) -> SharedMutexWriteGuard<T> {
         // First wait for any other writers to unlock.
         while state_lock.is_writer_active() {
             state_lock = self.both.wait(state_lock).unwrap();
@@ -79,15 +109,15 @@ impl<T> SharedMutex<T> {
 
         // Create the guard, then release the state lock.
         SharedMutexWriteGuard {
-            data: unsafe { &mut *self.data.get() },
+            data: &mut *self.data.get(),
             mutex: self
         }
     }
 
-    /// Acquire a shared Read lock on the data.
-    pub fn read(&self) -> SharedMutexReadGuard<T> {
-        let mut state_lock = self.state.lock().unwrap();
-
+    /// Get a read lock using the given state lock.
+    ///
+    /// WARNING: The lock MUST be from self.state!!
+    unsafe fn read_from(&self, mut state_lock: MutexGuard<State>) -> SharedMutexReadGuard<T> {
         // Wait for any writers to finish and for there to be space
         // for another reader. (There are a max of 2^63 readers at any time)
         while state_lock.is_writer_active() || state_lock.has_max_readers() {
@@ -102,24 +132,13 @@ impl<T> SharedMutex<T> {
 
         // Create the guard, then release the state lock.
         SharedMutexReadGuard {
-            data: unsafe { &*self.data.get() },
+            data: &*self.data.get(),
             mutex: self
         }
     }
 
-    /// Get a mutable reference to the data without locking.
-    ///
-    /// Safe since it requires exclusive access to the lock itself.
-    pub fn get_mut(&mut self) -> &mut T { unsafe { &mut *self.data.get() } }
-
-    /// Extract the data from the lock and destroy the lock.
-    ///
-    /// Safe since it requires ownership of the lock.
-    pub fn into_inner(self) -> T {
-        unsafe { self.data.into_inner() }
-    }
-
-    unsafe fn unlock_reader(&self) {
+    #[inline]
+    unsafe fn unlock_reader(&self) -> MutexGuard<State> {
         let mut state_lock = self.state.lock().unwrap();
 
         // First decrement the reader count.
@@ -137,30 +156,39 @@ impl<T> SharedMutex<T> {
             // Wake up a reader to replace us.
             self.both.notify_one()
         }
+
+        // Return the lock for potential further use.
+        state_lock
     }
 
-    unsafe fn unlock_writer(&self) {
+    #[inline]
+    unsafe fn unlock_writer(&self) -> MutexGuard<State> {
         let mut state_lock = self.state.lock().unwrap();
 
         // Writer locks are exclusive so we know we can just
         // set the state to empty.
         *state_lock = State::new();
+
+        state_lock
     }
 }
 
 impl<'mutex, T> Deref for SharedMutexReadGuard<'mutex, T> {
     type Target = T;
 
+    #[inline]
     fn deref(&self) -> &T { self.data }
 }
 
 impl<'mutex, T> Deref for SharedMutexWriteGuard<'mutex, T> {
     type Target = T;
 
+    #[inline]
     fn deref(&self) -> &T { self.data }
 }
 
 impl<'mutex, T> DerefMut for SharedMutexWriteGuard<'mutex, T> {
+    #[inline]
     fn deref_mut(&mut self) -> &mut T { self.data }
 }
 
@@ -171,14 +199,15 @@ impl<'mutex, T> SharedMutexReadGuard<'mutex, T> {
         let shared = self.mutex;
 
         // Unlock the reader lock.
-        drop(self);
+        let state_lock = unsafe { shared.unlock_reader() };
 
-        // Get the mutex, wait on it, then immediately drop the lock we get back.
-        let state_lock = shared.state.lock().unwrap();
-        drop(cond.wait(state_lock).unwrap());
+        // Don't double-unlock.
+        mem::forget(self);
+
+        let state_lock = cond.wait(state_lock).unwrap();
 
         // Re-acquire the read lock.
-        shared.read()
+        unsafe { shared.read_from(state_lock) }
     }
 }
 
@@ -188,27 +217,30 @@ impl<'mutex, T> SharedMutexWriteGuard<'mutex, T> {
         // Grab a reference for later.
         let shared = self.mutex;
 
-        // Unlock the reader lock.
-        drop(self);
+        // Unlock the writer lock.
+        let state_lock = unsafe { shared.unlock_writer() };
 
-        // Get the mutex, wait on it, then immediately drop the lock we get back.
-        let state_lock = shared.state.lock().unwrap();
-        drop(cond.wait(state_lock).unwrap());
+        // Don't double-unlock.
+        mem::forget(self);
 
-        // Re-acquire the read lock.
-        shared.write()
+        let state_lock = cond.wait(state_lock).unwrap();
+
+        // Re-acquire the write lock.
+        unsafe { shared.write_from(state_lock) }
     }
 }
 
 impl<'mutex, T> Drop for SharedMutexReadGuard<'mutex, T> {
+    #[inline]
     fn drop(&mut self) {
-        unsafe { self.mutex.unlock_reader() }
+        unsafe { let _ = self.mutex.unlock_reader(); }
     }
 }
 
 impl<'mutex, T> Drop for SharedMutexWriteGuard<'mutex, T> {
+    #[inline]
     fn drop(&mut self) {
-        unsafe { self.mutex.unlock_writer() }
+        unsafe { let _ = self.mutex.unlock_writer(); }
     }
 }
 
