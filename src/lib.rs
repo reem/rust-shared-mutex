@@ -193,40 +193,76 @@ impl<'mutex, T> DerefMut for SharedMutexWriteGuard<'mutex, T> {
 }
 
 impl<'mutex, T> SharedMutexReadGuard<'mutex, T> {
-    /// Wait on the given condition variable.
-    pub fn wait(self, cond: &Condvar) -> Self {
+    /// Wait on the given condition variable, and resume with a write lock.
+    ///
+    /// See the documentation for `std::sync::Condvar::wait` for more information.
+    pub fn wait_for_write(self, cond: &Condvar) -> SharedMutexWriteGuard<'mutex, T> {
         // Grab a reference for later.
         let shared = self.mutex;
 
-        // Unlock the reader lock.
-        let state_lock = unsafe { shared.unlock_reader() };
+        // Unlock and wait.
+        let state_lock = cond.wait(self.unlock()).unwrap();
+
+        // Re-acquire as a write lock.
+        unsafe { shared.write_from(state_lock) }
+    }
+
+    /// Wait on the given condition variable, and resume with another read lock.
+    ///
+    /// See the documentation for `std::sync::Condvar::wait` for more information.
+    pub fn wait_for_read(self, cond: &Condvar) -> Self {
+        // Grab a reference for later.
+        let shared = self.mutex;
+
+        // Unlock and wait.
+        let state_lock = cond.wait(self.unlock()).unwrap();
+
+        // Re-acquire as a read lock.
+        unsafe { shared.read_from(state_lock) }
+    }
+
+    fn unlock(self) -> MutexGuard<'mutex, State> {
+        // Unlock the read lock.
+        let state_lock = unsafe { self.mutex.unlock_reader() };
 
         // Don't double-unlock.
         mem::forget(self);
-
-        let state_lock = cond.wait(state_lock).unwrap();
-
-        // Re-acquire the read lock.
-        unsafe { shared.read_from(state_lock) }
+        state_lock
     }
 }
 
 impl<'mutex, T> SharedMutexWriteGuard<'mutex, T> {
-    /// Wait on the given condition variable.
-    pub fn wait(self, cond: &Condvar) -> Self {
+    /// Wait on the given condition variable, and resume with another write lock.
+    pub fn wait_for_write(self, cond: &Condvar) -> Self {
         // Grab a reference for later.
         let shared = self.mutex;
 
-        // Unlock the writer lock.
-        let state_lock = unsafe { shared.unlock_writer() };
+        // Unlock and wait.
+        let state_lock = cond.wait(self.unlock()).unwrap();
+
+        // Re-acquire as a write lock.
+        unsafe { shared.write_from(state_lock) }
+    }
+
+    /// Wait on the given condition variable, and resume with a read lock.
+    pub fn wait_for_read(self, cond: &Condvar) -> SharedMutexReadGuard<'mutex, T> {
+        // Grab a reference for later.
+        let shared = self.mutex;
+
+        // Unlock and wait.
+        let state_lock = cond.wait(self.unlock()).unwrap();
+
+        // Re-acquire as a read lock.
+        unsafe { shared.read_from(state_lock) }
+    }
+
+    fn unlock(self) -> MutexGuard<'mutex, State> {
+        // Unlock the write lock.
+        let state_lock = unsafe { self.mutex.unlock_writer() };
 
         // Don't double-unlock.
         mem::forget(self);
-
-        let state_lock = cond.wait(state_lock).unwrap();
-
-        // Re-acquire the write lock.
-        unsafe { shared.write_from(state_lock) }
+        state_lock
     }
 }
 
