@@ -12,6 +12,7 @@ use std::{mem, ptr};
 
 pub use raw::RawSharedMutex;
 
+pub mod poison;
 mod raw;
 
 /// A lock providing both shared read locks and exclusive write locks.
