@@ -5,6 +5,9 @@
 //!
 //! A RwLock that can be used with a Condvar.
 
+#[cfg(test)]
+extern crate scoped_pool;
+
 use std::sync::{Condvar, LockResult};
 use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut};
@@ -352,6 +355,7 @@ impl<'mutex, T: ?Sized> Drop for MappedSharedMutexWriteGuard<'mutex, T> {
 
 #[cfg(test)]
 mod test {
+    use scoped_pool::Pool;
     use super::*;
 
     fn _check_bounds() {
@@ -361,6 +365,44 @@ mod test {
         _is_send_sync::<SharedMutex<()>>();
         _is_send_sync::<SharedMutexReadGuard<()>>();
         _is_send_sync::<SharedMutexWriteGuard<()>>();
+    }
+
+    #[test]
+    fn test_simple_multithreaded() {
+        let pool = Pool::new(8);
+        let mut mutex = SharedMutex::new(0);
+        let n = 100;
+
+        pool.scoped(|scope| {
+            for _ in 0..n {
+                scope.execute(|| {
+                    let before = *mutex.read().unwrap();
+                    *mutex.write().unwrap() += 1;
+                    let after = *mutex.read().unwrap();
+
+                    assert!(before < after, "Time travel! {:?} >= {:?}", before, after);
+                })
+            }
+        });
+
+        assert_eq!(*mutex.get_mut().unwrap(), 100);
+        pool.shutdown();
+    }
+
+    #[test]
+    fn test_simple_single_thread() {
+        let mut mutex = SharedMutex::new(0);
+        let n = 100;
+
+        for _ in 0..n {
+            let before = *mutex.read().unwrap();
+            *mutex.write().unwrap() += 1;
+            let after = *mutex.read().unwrap();
+
+            assert!(before < after, "Time travel! {:?} >= {:?}", before, after);
+        }
+
+        assert_eq!(*mutex.get_mut().unwrap(), 100);
     }
 }
 

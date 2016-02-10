@@ -8,3 +8,6 @@ description = "A RwLock that can be used with a Condvar."
 readme = "README.md"
 license = "MIT"
 
+[dev-dependencies]
+scoped-pool = "0.1"
+

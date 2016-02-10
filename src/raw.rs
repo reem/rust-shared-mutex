@@ -135,6 +135,9 @@ impl RawSharedMutex {
         // set the state to empty.
         *state_lock = State::new();
 
+        // Wake any pending readers or writers.
+        self.both.notify_all();
+
         state_lock
     }
 
