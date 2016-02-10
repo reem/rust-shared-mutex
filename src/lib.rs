@@ -553,12 +553,19 @@ mod test {
 
     #[test]
     fn test_mapping() {
+        let mutex = SharedMutex::new(vec![1, 2, 3]);
 
+        *mutex.write().unwrap().into_mapped()
+            .map(|v| &mut v[0]) = 100;
+
+        assert_eq!(*mutex.read().unwrap().into_mapped().map(|v| &v[0]), 100);
     }
 
     #[test]
     fn test_try_locking() {
-
+        let mutex = SharedMutex::new(10);
+        mutex.try_read().unwrap();
+        mutex.try_write().unwrap();
     }
 }
 
