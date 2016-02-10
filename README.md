@@ -20,6 +20,11 @@ condition variables. In addition to this extremely useful new API, this crate
 also features some useful combinators, such as mapped guards, and removes other
 restrictions by making the guard types `Send` and `Sync`.
 
+The library also provides some other useful APIs, like a `RawSharedMutex` and
+utilities for building your own internally poisoned interior mutability types
+in the `poison` module (these are used in the implementation of
+`SharedMutex`).
+
 ## Safety
 
 The locking strategy has been adapted from the implementation of
