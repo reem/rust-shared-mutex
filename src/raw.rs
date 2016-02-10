@@ -182,7 +182,6 @@ impl RawSharedMutex {
     ///
     /// Behavior is unspecified if there was no previous accompanying `read`.
     #[inline]
-    #[inline]
     pub fn wait_from_read_to_write(&self, cond: &Condvar) {
         let state_lock = self.unlock_read_to();
         let state_lock = cond.wait(state_lock).unwrap();

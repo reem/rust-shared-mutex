@@ -171,6 +171,7 @@ impl<'mutex, T: ?Sized> SharedMutexReadGuard<'mutex, T> {
             data: self.data
         };
 
+        // Don't double-unlock.
         mem::forget(self);
 
         guard
@@ -179,7 +180,7 @@ impl<'mutex, T: ?Sized> SharedMutexReadGuard<'mutex, T> {
     /// Wait on the given condition variable, and resume with a write lock.
     ///
     /// See the documentation for `std::sync::Condvar::wait` for more information.
-    pub fn wait_for_write(&self, cond: &Condvar) -> LockResult<SharedMutexWriteGuard<'mutex, T>> {
+    pub fn wait_for_write(self, cond: &Condvar) -> LockResult<SharedMutexWriteGuard<'mutex, T>> {
         self.mutex.raw.wait_from_read_to_write(cond);
 
         let guard = unsafe { SharedMutexWriteGuard::new(self.mutex) };
@@ -193,10 +194,15 @@ impl<'mutex, T: ?Sized> SharedMutexReadGuard<'mutex, T> {
     /// Wait on the given condition variable, and resume with another read lock.
     ///
     /// See the documentation for `std::sync::Condvar::wait` for more information.
-    pub fn wait_for_read(self, cond: &Condvar) -> Self {
+    pub fn wait_for_read(self, cond: &Condvar) -> LockResult<Self> {
         self.mutex.raw.wait_from_read_to_read(cond);
 
-        self
+        let guard = unsafe { SharedMutexReadGuard::new(self.mutex) };
+
+        // Don't double-unlock.
+        mem::forget(self);
+
+        guard
     }
 }
 
@@ -211,16 +217,22 @@ impl<'mutex, T: ?Sized> SharedMutexWriteGuard<'mutex, T> {
             data: unsafe { (&mut *self.mutex.data.get()).get_mut() }
         };
 
+        // Don't double-unlock.
         mem::forget(self);
 
         guard
     }
 
     /// Wait on the given condition variable, and resume with another write lock.
-    pub fn wait_for_write(self, cond: &Condvar) -> Self {
+    pub fn wait_for_write(self, cond: &Condvar) -> LockResult<Self> {
         self.mutex.raw.wait_from_write_to_write(cond);
 
-        self
+        let guard = unsafe { SharedMutexWriteGuard::new(self.mutex) };
+
+        // Don't double-unlock.
+        mem::forget(self);
+
+        guard
     }
 
     /// Wait on the given condition variable, and resume with a read lock.
@@ -379,7 +391,7 @@ impl<'mutex, T: ?Sized> Drop for MappedSharedMutexWriteGuard<'mutex, T> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Barrier;
+    use std::sync::{Condvar, Barrier};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use scoped_pool::Pool;
 
@@ -491,6 +503,62 @@ mod test {
 
         mutex.get_mut().unwrap();
         pool.shutdown();
+    }
+
+    #[test]
+    fn test_simple_waiting() {
+        let pool = Pool::new(20);
+        let mutex = SharedMutex::new(());
+        let cond = Condvar::new();
+
+        pool.scoped(|scope| {
+            let lock = mutex.write().unwrap();
+
+            scope.execute(|| {
+                let _ = mutex.write().unwrap();
+                cond.notify_one();
+            });
+
+            // Write -> Read
+            let lock = lock.wait_for_read(&cond).unwrap();
+
+            scope.execute(|| {
+                drop(mutex.write().unwrap());
+                cond.notify_one();
+            });
+
+            // Read -> Read
+            let lock = lock.wait_for_read(&cond).unwrap();
+
+            scope.execute(|| {
+                drop(mutex.write().unwrap());
+                cond.notify_one();
+            });
+
+
+            // Read -> Write
+            let lock = lock.wait_for_write(&cond).unwrap();
+
+            scope.execute(|| {
+                drop(mutex.write().unwrap());
+                cond.notify_one();
+            });
+
+            // Write -> Write
+            lock.wait_for_write(&cond).unwrap();
+        });
+
+        pool.shutdown();
+    }
+
+    #[test]
+    fn test_mapping() {
+
+    }
+
+    #[test]
+    fn test_try_locking() {
+
     }
 }
 
