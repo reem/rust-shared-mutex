@@ -48,6 +48,25 @@ impl RawSharedMutex {
         state_lock.add_reader();
     }
 
+    /// Attempt to acquire a shared read lock without blocking.
+    ///
+    /// Returns true if we succeeded and false if acquiring a read lock would
+    /// require blocking.
+    pub fn try_read(&self) -> bool {
+        let mut state_lock = self.state.lock().unwrap();
+
+        // If there isn't a waiting writer and there is space for another reader
+        // we can just take another read lock.
+        if !state_lock.is_writer_active() && !state_lock.has_max_readers() {
+            state_lock.add_reader();
+
+            // Success!
+            true
+        } else {
+            false // We would have to block
+        }
+    }
+
     /// Acquire an exclusive write lock.
     ///
     /// Blocks until the write lock can be acquired. The lock can be released
@@ -84,6 +103,24 @@ impl RawSharedMutex {
         // At this point there should be one writer (us) and no readers.
         debug_assert!(state_lock.is_writer_active() && state_lock.readers() == 0,
                       "State not empty on write lock! State = {:?}", *state_lock);
+    }
+
+    /// Attempt to acquire an exclusive write lock without blocking.
+    ///
+    /// Returns true if we succeeded and false if acquiring the write lock would
+    /// require blocking.
+    pub fn try_write(&self) -> bool {
+        let mut state_lock = self.state.lock().unwrap();
+
+        // If there are no readers or writers we can just take the lock.
+        if !state_lock.is_writer_active() && state_lock.readers() == 0 {
+            state_lock.set_writer_active();
+
+            // Success!
+            true
+        } else {
+            false // We would have to block
+        }
     }
 
     /// Unlock a previously acquired read lock.

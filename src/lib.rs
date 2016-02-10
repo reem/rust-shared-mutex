@@ -8,7 +8,7 @@
 #[cfg(test)]
 extern crate scoped_pool;
 
-use std::sync::{Condvar, LockResult};
+use std::sync::{Condvar, LockResult, TryLockResult, TryLockError};
 use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut};
 use std::{mem, ptr};
@@ -67,6 +67,30 @@ impl<T: ?Sized> SharedMutex<T> {
     pub fn read(&self) -> LockResult<SharedMutexReadGuard<T>> {
         self.raw.read();
         unsafe { SharedMutexReadGuard::new(self) }
+    }
+
+    /// Attempt to acquire a shared Read lock on the data.
+    ///
+    /// If acquiring the lock would block, returns `TryLockError::WouldBlock`.
+    #[inline]
+    pub fn try_read(&self) -> TryLockResult<SharedMutexReadGuard<T>> {
+        if self.raw.try_read() {
+            Ok(try!(unsafe { SharedMutexReadGuard::new(self) }))
+        } else {
+            Err(TryLockError::WouldBlock)
+        }
+    }
+
+    /// Attempt to acquire an exclusive Write lock on the data.
+    ///
+    /// If acquiring the lock would block, returns `TryLockError::WouldBlock`.
+    #[inline]
+    pub fn try_write(&self) -> TryLockResult<SharedMutexWriteGuard<T>> {
+        if self.raw.try_write() {
+            Ok(try!(unsafe { SharedMutexWriteGuard::new(self) }))
+        } else {
+            Err(TryLockError::WouldBlock)
+        }
     }
 
     /// Get a mutable reference to the data without locking.
@@ -427,7 +451,7 @@ mod test {
 
         let threads = 50;
         let actors = threads * 20; // Must be a multiple threads.
-        let actions_per_actor = 20;
+        let actions_per_actor = 100;
         let start_barrier = Barrier::new(threads);
         let pool = Pool::new(threads);
 
