@@ -355,7 +355,10 @@ impl<'mutex, T: ?Sized> Drop for MappedSharedMutexWriteGuard<'mutex, T> {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Barrier;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use scoped_pool::Pool;
+
     use super::*;
 
     fn _check_bounds() {
@@ -403,6 +406,67 @@ mod test {
         }
 
         assert_eq!(*mutex.get_mut().unwrap(), 100);
+    }
+
+    #[test]
+    fn test_locking_multithreaded() {
+        // This test makes a best effort to test the actual locking
+        // behavior of the mutex.
+        //
+        // Read locks attempt to read from an atomic many times,
+        // while write locks write to them many times.
+        //
+        // If any of these operations interleave (readers read different
+        // values under the same lock, writers observe other writers) then
+        // we know there is a bug.
+        //
+        // We make use of a barrier to attempt to cluster threads together.
+
+        let mut mutex = SharedMutex::new(());
+        let value = AtomicUsize::new(0);
+
+        let threads = 50;
+        let actors = threads * 20; // Must be a multiple threads.
+        let actions_per_actor = 20;
+        let start_barrier = Barrier::new(threads);
+        let pool = Pool::new(threads);
+
+        pool.scoped(|scope| {
+            for _ in 0..actors {
+                // Reader
+                scope.execute(|| {
+                    start_barrier.wait();
+
+                    let _read = mutex.read().unwrap();
+                    let original = value.load(Ordering::SeqCst);
+
+                    for _ in 0..actions_per_actor {
+                        assert_eq!(original, value.load(Ordering::SeqCst));
+                    }
+                });
+
+                // Writer
+                scope.execute(|| {
+                    start_barrier.wait();
+
+                    let _write = mutex.write().unwrap();
+                    let mut previous = value.load(Ordering::SeqCst);
+
+                    for _ in 0..actions_per_actor {
+                        let next = value.fetch_add(1, Ordering::SeqCst);
+
+                        // fetch_add returns the old value
+                        assert_eq!(previous, next);
+
+                        // next time we will expect the old value + 1
+                        previous = next + 1;
+                    }
+                });
+            }
+        });
+
+        mutex.get_mut().unwrap();
+        pool.shutdown();
     }
 }
 
