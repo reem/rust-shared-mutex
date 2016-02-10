@@ -5,10 +5,12 @@
 //!
 //! A RwLock that can be used with a Condvar.
 
-use std::sync::Condvar;
+use std::sync::{Condvar, LockResult};
 use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut};
 use std::{mem, ptr};
+
+use poison::{Poison, PoisonGuard, RawPoisonGuard};
 
 pub use raw::RawSharedMutex;
 
@@ -24,7 +26,7 @@ mod raw;
 /// Another difference from `std::sync::RwLock` is that the guard types are `Send`.
 pub struct SharedMutex<T: ?Sized> {
     raw: RawSharedMutex,
-    data: UnsafeCell<T>
+    data: UnsafeCell<Poison<T>>
 }
 
 unsafe impl<T: ?Sized + Send> Send for SharedMutex<T> {}
@@ -36,7 +38,7 @@ impl<T> SharedMutex<T> {
     pub fn new(value: T) -> Self {
         SharedMutex {
             raw: RawSharedMutex::new(),
-            data: UnsafeCell::new(value)
+            data: UnsafeCell::new(Poison::new(value))
         }
     }
 
@@ -44,37 +46,34 @@ impl<T> SharedMutex<T> {
     ///
     /// Safe since it requires ownership of the lock.
     #[inline]
-    pub fn into_inner(self) -> T {
-        unsafe { self.data.into_inner() }
+    pub fn into_inner(self) -> LockResult<T> {
+        unsafe { self.data.into_inner().into_inner() }
     }
 }
 
 impl<T: ?Sized> SharedMutex<T> {
     /// Acquire an exclusive Write lock on the data.
     #[inline]
-    pub fn write(&self) -> SharedMutexWriteGuard<T> {
+    pub fn write(&self) -> LockResult<SharedMutexWriteGuard<T>> {
         self.raw.write();
-        SharedMutexWriteGuard {
-            data: unsafe { &mut *self.data.get() },
-            mutex: self
-        }
+        unsafe { SharedMutexWriteGuard::new(self) }
     }
 
     /// Acquire a shared Read lock on the data.
     #[inline]
-    pub fn read(&self) -> SharedMutexReadGuard<T> {
+    pub fn read(&self) -> LockResult<SharedMutexReadGuard<T>> {
         self.raw.read();
-        SharedMutexReadGuard {
-            data: unsafe { &*self.data.get() },
-            mutex: self
-        }
+        unsafe { SharedMutexReadGuard::new(self) }
     }
 
     /// Get a mutable reference to the data without locking.
     ///
     /// Safe since it requires exclusive access to the lock itself.
     #[inline]
-    pub fn get_mut(&mut self) -> &mut T { unsafe { &mut *self.data.get() } }
+    pub fn get_mut(&mut self) -> LockResult<&mut T> {
+        poison::map_result(unsafe { &mut *self.data.get() }.lock(),
+                           |poison| unsafe { poison.into_mut() })
+    }
 }
 
 /// A shared read guard on a SharedMutex.
@@ -88,7 +87,7 @@ unsafe impl<'mutex, T: ?Sized + Sync> Sync for SharedMutexReadGuard<'mutex, T> {
 
 /// An exclusive write guard on a SharedMutex.
 pub struct SharedMutexWriteGuard<'mutex, T: ?Sized + 'mutex> {
-    data: &'mutex mut T,
+    data: PoisonGuard<'mutex, T>,
     mutex: &'mutex SharedMutex<T>
 }
 
@@ -103,12 +102,36 @@ impl<'mutex, T: ?Sized> Deref for SharedMutexWriteGuard<'mutex, T> {
     type Target = T;
 
     #[inline]
-    fn deref(&self) -> &T { self.data }
+    fn deref(&self) -> &T { self.data.get() }
 }
 
 impl<'mutex, T: ?Sized> DerefMut for SharedMutexWriteGuard<'mutex, T> {
     #[inline]
-    fn deref_mut(&mut self) -> &mut T { self.data }
+    fn deref_mut(&mut self) -> &mut T { self.data.get_mut() }
+}
+
+impl<'mutex, T: ?Sized> SharedMutexReadGuard<'mutex, T> {
+    #[inline]
+    unsafe fn new(mutex: &'mutex SharedMutex<T>) -> LockResult<Self> {
+        poison::map_result((&*mutex.data.get()).get(), |data| {
+            SharedMutexReadGuard {
+                data: data,
+                mutex: mutex
+            }
+        })
+    }
+}
+
+impl<'mutex, T: ?Sized> SharedMutexWriteGuard<'mutex, T> {
+    #[inline]
+    unsafe fn new(mutex: &'mutex SharedMutex<T>) -> LockResult<Self> {
+        poison::map_result((&mut *mutex.data.get()).lock(), |poison| {
+            SharedMutexWriteGuard {
+                data: poison,
+                mutex: mutex
+            }
+        })
+    }
 }
 
 impl<'mutex, T: ?Sized> SharedMutexReadGuard<'mutex, T> {
@@ -129,13 +152,10 @@ impl<'mutex, T: ?Sized> SharedMutexReadGuard<'mutex, T> {
     /// Wait on the given condition variable, and resume with a write lock.
     ///
     /// See the documentation for `std::sync::Condvar::wait` for more information.
-    pub fn wait_for_write(&self, cond: &Condvar) -> SharedMutexWriteGuard<'mutex, T> {
+    pub fn wait_for_write(&self, cond: &Condvar) -> LockResult<SharedMutexWriteGuard<'mutex, T>> {
         self.mutex.raw.wait_from_read_to_write(cond);
 
-        let guard = SharedMutexWriteGuard {
-            data: unsafe { &mut *self.mutex.data.get() },
-            mutex: self.mutex
-        };
+        let guard = unsafe { SharedMutexWriteGuard::new(self.mutex) };
 
         // Don't double-unlock.
         mem::forget(self);
@@ -160,7 +180,8 @@ impl<'mutex, T: ?Sized> SharedMutexWriteGuard<'mutex, T> {
     pub fn into_mapped(self) -> MappedSharedMutexWriteGuard<'mutex, T> {
         let guard = MappedSharedMutexWriteGuard {
             mutex: &self.mutex.raw,
-            data: unsafe { &mut *self.mutex.data.get() }
+            poison: unsafe { ptr::read(&self.data).into_raw() },
+            data: unsafe { (&mut *self.mutex.data.get()).get_mut() }
         };
 
         mem::forget(self);
@@ -176,13 +197,10 @@ impl<'mutex, T: ?Sized> SharedMutexWriteGuard<'mutex, T> {
     }
 
     /// Wait on the given condition variable, and resume with a read lock.
-    pub fn wait_for_read(self, cond: &Condvar) -> SharedMutexReadGuard<'mutex, T> {
+    pub fn wait_for_read(self, cond: &Condvar) -> LockResult<SharedMutexReadGuard<'mutex, T>> {
         self.mutex.raw.wait_from_write_to_read(cond);
 
-        let guard = SharedMutexReadGuard {
-            data: unsafe { &*self.mutex.data.get() },
-            mutex: self.mutex
-        };
+        let guard = unsafe { SharedMutexReadGuard::new(self.mutex) };
 
         // Don't double-unlock.
         mem::forget(self);
@@ -216,7 +234,8 @@ pub struct MappedSharedMutexReadGuard<'mutex, T: ?Sized + 'mutex> {
 /// `Condvar`.
 pub struct MappedSharedMutexWriteGuard<'mutex, T: ?Sized + 'mutex> {
     mutex: &'mutex RawSharedMutex,
-    data: &'mutex mut T
+    poison: RawPoisonGuard<'mutex>,
+    data: &'mutex mut T,
 }
 
 impl<'mutex, T: ?Sized> MappedSharedMutexReadGuard<'mutex, T> {
@@ -286,11 +305,14 @@ impl<'mutex, T: ?Sized> MappedSharedMutexWriteGuard<'mutex, T> {
 
         match action(data) {
             Ok(new_data) => {
+                let poison = unsafe { ptr::read(&self.poison) };
+
                 // Don't double-unlock.
                 mem::forget(self);
 
                 Ok(MappedSharedMutexWriteGuard {
                     data: new_data,
+                    poison: poison,
                     mutex: mutex
                 })
             },
