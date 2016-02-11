@@ -12,7 +12,9 @@ As a result, most operating system's native libraries come with a reader-writer
 lock implementation in addition to mutual exclusion locks. However, on unix
 systems, this reader-writer lock (which is used in `std::sync::RwLock`) cannot
 be associated with a condition variable, which are limited to the native mutex
-(which is used in `std::sync::Mutex`).
+(which is used in `std::sync::Mutex`). On Windows the native reader-writer lock
+supports waiting on a condition variable but this functionality is not yet
+exposed in the standard library.
 
 SharedMutex is an implementation of a reader-writer lock without this (and
 other) restrictions - shared mutex guards provide methods for waiting on
@@ -22,8 +24,7 @@ restrictions by making the guard types `Send` and `Sync`.
 
 The library also provides some other useful APIs, like a `RawSharedMutex` and
 utilities for building your own internally poisoned interior mutability types
-in the `poison` module (these are used in the implementation of
-`SharedMutex`).
+in the `poison` module (these are used in the implementation of `SharedMutex`).
 
 ## Safety
 
