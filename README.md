@@ -2,7 +2,7 @@
 
 > A reader-writer lock that can be used with a Condvar.
 
-## [Documentation](https://crates.fyi/crates/shared-mutex/0.2.0)
+## [Documentation](https://crates.fyi/crates/shared-mutex/0.2.1)
 
 Reader writer locks can be more efficient than mutual exclusion locks in cases
 where many operations require read-only access to the data, as they can
