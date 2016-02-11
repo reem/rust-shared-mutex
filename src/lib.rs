@@ -18,6 +18,7 @@ use poison::{Poison, PoisonGuard, RawPoisonGuard};
 pub use raw::RawSharedMutex;
 
 pub mod poison;
+pub mod monitor;
 mod raw;
 
 /// A lock providing both shared read locks and exclusive write locks.
