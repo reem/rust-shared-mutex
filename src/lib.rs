@@ -316,6 +316,25 @@ impl<'mutex, T: ?Sized> MappedSharedMutexReadGuard<'mutex, T> {
             Err(e) => { Err((self, e)) }
         }
     }
+
+    /// Recover the original guard for waiting.
+    ///
+    /// Takes the original mutex to recover the original type and data. If the
+    /// passed mutex is not the same object as the original mutex, returns `Err`.
+    #[inline]
+    pub fn recover<U: ?Sized>(self, mutex: &'mutex SharedMutex<U>) -> Result<SharedMutexReadGuard<'mutex, U>, Self> {
+        if self.mutex.is(&mutex.raw) {
+            // The mutex can't have become poisoned since we are continuously holding a guard.
+            let guard = unsafe { SharedMutexReadGuard::new(mutex) }.unwrap();
+
+            // Don't double-unlock.
+            mem::forget(self);
+
+            Ok(guard)
+        } else {
+            Err(self)
+        }
+    }
 }
 
 impl<'mutex, T: ?Sized> MappedSharedMutexWriteGuard<'mutex, T> {
@@ -357,6 +376,25 @@ impl<'mutex, T: ?Sized> MappedSharedMutexWriteGuard<'mutex, T> {
                 })
             },
             Err(e) => { Err((self, e)) }
+        }
+    }
+
+    /// Recover the original guard for waiting.
+    ///
+    /// Takes the original mutex to recover the original type and data. If the
+    /// passed mutex is not the same object as the original mutex, returns `Err`.
+    #[inline]
+    pub fn recover<U: ?Sized>(self, mutex: &'mutex SharedMutex<U>) -> Result<SharedMutexWriteGuard<'mutex, U>, Self> {
+        if self.mutex.is(&mutex.raw) {
+            // The mutex can't have become poisoned since we are continuously holding a guard.
+            let guard = unsafe { SharedMutexWriteGuard::new(mutex) }.unwrap();
+
+            // Don't double-unlock.
+            mem::forget(self);
+
+            Ok(guard)
+        } else {
+            Err(self)
         }
     }
 }
@@ -604,6 +642,18 @@ mod test {
             .map(|v| &mut v[0]) = 100;
 
         assert_eq!(*mutex.read().unwrap().into_mapped().map(|v| &v[0]), 100);
+    }
+
+    #[test]
+    fn test_map_recover() {
+        let mutex = SharedMutex::new(vec![1, 2]);
+
+        let mut write_map = mutex.write().unwrap().into_mapped()
+            .map(|v| &mut v[0]);
+        *write_map = 123;
+
+        let whole_guard = write_map.recover(&mutex).unwrap();
+        assert_eq!(&*whole_guard, &[123, 2]);
     }
 
     #[test]

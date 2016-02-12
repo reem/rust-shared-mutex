@@ -22,6 +22,15 @@ impl RawSharedMutex {
         }
     }
 
+    /// Checks if this mutex and the other are the same mutex.
+    ///
+    /// If `is` returns true, the two references point to the same
+    /// mutex, and they may be used interchangeably.
+    #[inline]
+    pub fn is(&self, other: &Self) -> bool {
+        self as *const Self == other as *const Self
+    }
+
     /// Acquire a shared read lock.
     ///
     /// Blocks until a read lock can be acquired. The lock can be released
@@ -272,5 +281,19 @@ impl State {
 
     #[inline]
     fn remove_reader(&mut self) { self.0 -= 1 }
+}
+
+#[cfg(test)]
+mod test {
+    use raw::RawSharedMutex;
+
+    #[test]
+    fn test_raw_is() {
+        let mutex1 = RawSharedMutex::new();
+        let mutex2 = RawSharedMutex::new();
+
+        assert!(mutex1.is(&mutex1));
+        assert!(!mutex1.is(&mutex2));
+    }
 }
 
