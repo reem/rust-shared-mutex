@@ -78,6 +78,10 @@ impl<T: ?Sized> Monitor<T> {
     /// notification and a predicate check, potentially causing a deadlock.
     #[inline]
     pub fn notify_all(&self) { self.cond.notify_all() }
+
+    /// Get a reference to the condition variable in this Monitor for external use.
+    #[inline]
+    pub fn cond(&self) -> &Condvar { &self.cond }
 }
 
 impl<'mutex, T: ?Sized> MonitorReadGuard<'mutex, T> {
