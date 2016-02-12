@@ -11,7 +11,7 @@ extern crate scoped_pool;
 use std::sync::{Condvar, LockResult, TryLockResult, TryLockError};
 use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut};
-use std::{mem, ptr};
+use std::{mem, ptr, fmt};
 
 use poison::{Poison, PoisonGuard, RawPoisonGuard};
 
@@ -388,6 +388,50 @@ impl<'mutex, T: ?Sized> Drop for MappedSharedMutexReadGuard<'mutex, T> {
 impl<'mutex, T: ?Sized> Drop for MappedSharedMutexWriteGuard<'mutex, T> {
     #[inline]
     fn drop(&mut self) { self.mutex.unlock_write() }
+}
+
+impl<T: ?Sized + fmt::Debug> fmt::Debug for SharedMutex<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut writer = f.debug_struct("SharedMutex");
+
+        match self.try_read() {
+            Ok(l) => writer.field("data", &&*l),
+            Err(TryLockError::WouldBlock) => writer.field("data", &"{{ locked }}"),
+            Err(TryLockError::Poisoned(_)) => writer.field("data", &"{{ poisoned }}")
+        }.finish()
+    }
+}
+
+impl<'mutex, T: ?Sized + fmt::Debug> fmt::Debug for SharedMutexReadGuard<'mutex, T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("SharedMutexReadGuard")
+            .field("data", &*self)
+            .finish()
+    }
+}
+
+impl<'mutex, T: ?Sized + fmt::Debug> fmt::Debug for SharedMutexWriteGuard<'mutex, T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("SharedMutexWriteGuard")
+            .field("data", &*self)
+            .finish()
+    }
+}
+
+impl<'mutex, T: ?Sized + fmt::Debug> fmt::Debug for MappedSharedMutexReadGuard<'mutex, T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("MappedSharedMutexReadGuard")
+            .field("data", &*self)
+            .finish()
+    }
+}
+
+impl<'mutex, T: ?Sized + fmt::Debug> fmt::Debug for MappedSharedMutexWriteGuard<'mutex, T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("MappedSharedMutexWriteGuard")
+            .field("data", &*self)
+            .finish()
+    }
 }
 
 #[cfg(test)]

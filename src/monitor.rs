@@ -6,6 +6,7 @@
 
 use std::sync::{Condvar, LockResult};
 use std::ops::{Deref, DerefMut};
+use std::fmt;
 
 use poison;
 use {SharedMutex, SharedMutexReadGuard, SharedMutexWriteGuard};
@@ -173,5 +174,29 @@ impl<T: ?Sized> AsMut<SharedMutex<T>> for Monitor<T> {
 
 impl<T> Into<SharedMutex<T>> for Monitor<T> {
     fn into(self) -> SharedMutex<T> { self.mutex }
+}
+
+impl<T: ?Sized + fmt::Debug> fmt::Debug for Monitor<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Monitor")
+            .field("mutex", &&self.mutex)
+            .finish()
+    }
+}
+
+impl<'mutex, T: ?Sized + fmt::Debug> fmt::Debug for MonitorReadGuard<'mutex, T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("MonitorReadGuard")
+            .field("data", &self.guard)
+            .finish()
+    }
+}
+
+impl<'mutex, T: ?Sized + fmt::Debug> fmt::Debug for MonitorWriteGuard<'mutex, T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("MonitorWriteGuard")
+            .field("data", &self.guard)
+            .finish()
+    }
 }
 

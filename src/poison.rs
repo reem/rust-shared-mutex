@@ -6,6 +6,7 @@ use std::thread;
 /// A typed poisoning wrapper.
 ///
 /// Enforces that access to the contained data respects poisoning.
+#[derive(Debug)]
 pub struct Poison<T: ?Sized> {
     raw: RawPoison,
     data: T
@@ -15,6 +16,7 @@ pub struct Poison<T: ?Sized> {
 ///
 /// If the current thread panics before this instance is dropped, the
 /// Poision will become poisoned when this instance drops.
+#[derive(Debug)]
 pub struct PoisonGuard<'poison, T: ?Sized + 'poison> {
     data: &'poison mut T,
     guard: RawPoisonGuard<'poison>
@@ -98,6 +100,7 @@ impl<'poison, T: ?Sized> PoisonGuard<'poison, T> {
 }
 
 /// A raw poisoning primitive, can be used to build automatically poisoning structures.
+#[derive(Debug)]
 pub struct RawPoison {
     poisoned: bool
 }
@@ -106,6 +109,7 @@ pub struct RawPoison {
 ///
 /// If the current thread panics before this instance is dropped, the RawPoison
 /// will become poisoned when this instance drops.
+#[derive(Debug)]
 pub struct RawPoisonGuard<'poison> {
     poison: &'poison mut RawPoison,
     panicking: bool
