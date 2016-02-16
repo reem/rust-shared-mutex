@@ -8,6 +8,8 @@
 #[cfg(test)]
 extern crate scoped_pool;
 
+extern crate poison;
+
 use std::sync::{Condvar, LockResult, TryLockResult, TryLockError};
 use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut};
@@ -17,7 +19,6 @@ use poison::{Poison, PoisonGuard, RawPoisonGuard};
 
 pub use raw::RawSharedMutex;
 
-pub mod poison;
 pub mod monitor;
 mod raw;
 
