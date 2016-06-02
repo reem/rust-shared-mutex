@@ -282,14 +282,14 @@ pub struct MappedSharedMutexWriteGuard<'mutex, T: ?Sized + 'mutex> {
 impl<'mutex, T: ?Sized> MappedSharedMutexReadGuard<'mutex, T> {
     /// Transform this guard into a sub-borrow of the original data.
     #[inline]
-    pub fn map<U, F>(self, action: F) -> MappedSharedMutexReadGuard<'mutex, U>
+    pub fn map<U: ?Sized, F>(self, action: F) -> MappedSharedMutexReadGuard<'mutex, U>
     where F: FnOnce(&T) -> &U {
         self.option_map(move |t| Some(action(t))).unwrap()
     }
 
     /// Conditionally transform this guard into a sub-borrow of the original data.
     #[inline]
-    pub fn option_map<U, F>(self, action: F) -> Option<MappedSharedMutexReadGuard<'mutex, U>>
+    pub fn option_map<U: ?Sized, F>(self, action: F) -> Option<MappedSharedMutexReadGuard<'mutex, U>>
     where F: FnOnce(&T) -> Option<&U> {
         self.result_map(move |t| action(t).ok_or(())).ok()
     }
@@ -298,7 +298,7 @@ impl<'mutex, T: ?Sized> MappedSharedMutexReadGuard<'mutex, T> {
     ///
     /// If the transformation operation is aborted, returns the original guard.
     #[inline]
-    pub fn result_map<U, E, F>(self, action: F)
+    pub fn result_map<U: ?Sized, E, F>(self, action: F)
         -> Result<MappedSharedMutexReadGuard<'mutex, U>, (Self, E)>
     where F: FnOnce(&T) -> Result<&U, E> {
         let data = self.data;
@@ -341,14 +341,14 @@ impl<'mutex, T: ?Sized> MappedSharedMutexReadGuard<'mutex, T> {
 impl<'mutex, T: ?Sized> MappedSharedMutexWriteGuard<'mutex, T> {
     /// Transform this guard into a sub-borrow of the original data.
     #[inline]
-    pub fn map<U, F>(self, action: F) -> MappedSharedMutexWriteGuard<'mutex, U>
+    pub fn map<U: ?Sized, F>(self, action: F) -> MappedSharedMutexWriteGuard<'mutex, U>
     where F: FnOnce(&mut T) -> &mut U {
         self.option_map(move |t| Some(action(t))).unwrap()
     }
 
     /// Conditionally transform this guard into a sub-borrow of the original data.
     #[inline]
-    pub fn option_map<U, F>(self, action: F) -> Option<MappedSharedMutexWriteGuard<'mutex, U>>
+    pub fn option_map<U: ?Sized, F>(self, action: F) -> Option<MappedSharedMutexWriteGuard<'mutex, U>>
     where F: FnOnce(&mut T) -> Option<&mut U> {
         self.result_map(move |t| action(t).ok_or(())).ok()
     }
@@ -357,7 +357,7 @@ impl<'mutex, T: ?Sized> MappedSharedMutexWriteGuard<'mutex, T> {
     ///
     /// If the transformation operation is aborted, returns the original guard.
     #[inline]
-    pub fn result_map<U, E, F>(self, action: F)
+    pub fn result_map<U: ?Sized, E, F>(self, action: F)
         -> Result<MappedSharedMutexWriteGuard<'mutex, U>, (Self, E)>
     where F: FnOnce(&mut T) -> Result<&mut U, E> {
         let data = unsafe { ptr::read(&self.data) };
